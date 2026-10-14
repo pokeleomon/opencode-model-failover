@@ -10,6 +10,12 @@ describe("isLimitError", () => {
     expect(isLimitError({ status: 429, message: "<html>429 Too Many Requests</html>" })).toBe(true);
     expect(isLimitError({ status: 400, code: "provider.invalid-request", message: "quota exceeded for free tier" })).toBe(true);
   });
+  it("ignores word-boundary false positives (bimonthly, 25 hours, delimited)", () => {
+    expect(isLimitError({ status: 500, message: "bimonthly report ready" })).toBe(false);
+    expect(isLimitError({ status: 500, message: "25 hours uptime" })).toBe(false);
+    expect(isLimitError({ status: 500, message: "delimited output" })).toBe(false);
+    expect(isLimitError({ status: 500, message: "unlimited plan" })).toBe(false);
+  });
 });
 describe("pickNext", () => {
   it("skips exhausted + paid without opt-in, prefers free then local", () => {

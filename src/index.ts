@@ -93,7 +93,10 @@ function classifyKind(
   if (allowPaid.includes(id) || allowPaid.includes(providerID) || allowPaid.includes(modelID)) {
     return "paid";
   }
-  return "free";
+  // Unknown non-Ollama models default to "custom" (usable, mid-rank), never
+  // "free": a paid model MUST declare kind:"paid" or be listed in allowPaid,
+  // otherwise auto-failover could bill the user without opt-in.
+  return "custom";
 }
 
 function parseModelRef(text: string): { providerID: string; modelID: string } | undefined {
@@ -291,7 +294,38 @@ async function handleRetry(ctx: Ctx, event: RetryEvent): Promise<void> {
     // All exhausted: honest Ollama-only announcement. Prefer a surviving
     // local; otherwise stop with a summary (never fake "offline").
     const local = next?.kind === "local" ? next : candidates.find((c) => c.kind === "local");
-    if (local && local.id !== currentId && canSwitch) {
+    // Manual mode (or a host without switchModel) never auto-switches, not
+    // even to a surviving local: record a SUGGEST announcement instead so
+    // the user stays in control. Already-on-local needs no suggestion.
+    if (mode !== "auto" || !canSwitch) {
+      if (local && local.id === currentId) {
+        await recordAnnouncement(
+          ctx,
+          event.sessionID,
+          buildAnnouncement({
+            oldModel: currentId,
+            newModel: local.id,
+            reason,
+            mode: "manual",
+            exhaustedAll: true,
+            localOnly: true,
+          }),
+        );
+        return;
+      }
+      await recordAnnouncement(
+        ctx,
+        event.sessionID,
+        buildAnnouncement({
+          oldModel: currentId,
+          reason: `${reason} (all remotes exhausted${local ? `; local ${local.id} available` : "; no local model configured"})`,
+          mode: "manual",
+          suggestion: local ? `Switch with /failover-use ${local.id}.` : undefined,
+        }),
+      );
+      return;
+    }
+    if (local && local.id !== currentId) {
       try {
         await ctx.session?.switchModel?.({
           sessionID: event.sessionID,
@@ -688,6 +722,11 @@ const plugin = Plugin.define({
     if (session && typeof session.hook === "function") {
       try {
         await session.hook("prompt", (event) => {
+          // Limitation: SessionPrompt exposes sessionID/messageID/prompt only
+          // (no current-model field in the @opencode/plugin typings), so a
+          // return here cannot see an external manual /model switch and may
+          // move the session once per scope; /failover-use pins are never
+          // overridden (maybeReturnFromOffline returns early for them).
           const prompt = event as unknown as { sessionID: string; messageID?: string };
           if (!prompt || typeof prompt.sessionID !== "string") return;
           const scope = typeof prompt.messageID === "string" ? prompt.messageID : prompt.sessionID;

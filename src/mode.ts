@@ -22,9 +22,13 @@ export async function getMode(
   storage: Storage,
   options: { mode?: string },
 ): Promise<FailoverMode> {
-  if (isMode(options.mode)) return options.mode;
+  // Storage-first precedence: plugin options only seed the stored mode once
+  // at setup (see setup in index.ts), so /failover-auto|manual writes are
+  // never shadowed by a stale options value on later calls. Options apply
+  // only when nothing has been stored yet (fresh install, pre-setup).
   const stored = await storage.get(MODE_KEY);
   if (isMode(stored)) return stored;
+  if (isMode(options.mode)) return options.mode;
   return "auto";
 }
 

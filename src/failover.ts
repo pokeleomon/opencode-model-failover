@@ -8,7 +8,7 @@ export type Candidate = {
 };
 
 const LIMIT_RE =
-  /quota|rate.?limit|usage.?limit|5.?hour|monthly|tokens? per|exhausted|overloaded with limit|invalid-request.*(quota|limit)/i;
+  /\bquota\b|\brate.?limits?(?:ed)?\b|\busage.?limits?(?:ed)?\b|\b5.?hours?\b|\bmonthly\b|\btokens? per\b|\bexhausted\b|\boverloaded with limit\b|invalid-request.*\b(quota|limits?)\b/i;
 
 export function isLimitError(input: { status?: number; message?: string; code?: string }): boolean {
   if (input.status === 429) return true;

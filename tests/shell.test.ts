@@ -130,6 +130,53 @@ describe("shell: retry hook", () => {
     expect(event.decision).toBeUndefined();
     expect(switches).toEqual([]);
   });
+
+  it("(7a) Ollama-only in auto switches to the surviving local", async () => {
+    const models = [{ providerID: "a", modelID: "m1" }, { providerID: "ollama", modelID: "q7b", kind: "local" }];
+    const storage = memStorage();
+    const { ctx, hooks, switches } = makeCtx(storage, { mode: "auto", models });
+    await setup(ctx as unknown);
+    const event = retryEvent("s1", "a", "m1", { message: "rate limited", status: 429 }) as unknown as {
+      decision: unknown;
+    };
+    await (hooks.get("retry") as (e: never) => Promise<void>)(event as never);
+    expect(event.decision).toEqual({ retry: false });
+    expect(switches).toEqual([{ sessionID: "s1", model: { providerID: "ollama", id: "q7b" } }]);
+    const last = String(storage.mem.get("failover:last:s1"));
+    expect(last).toContain("All remotes exhausted");
+    expect(last).toContain("ollama/q7b");
+  });
+
+  it("(7b) Ollama-only in manual does NOT switch; announcement suggests /failover-use", async () => {
+    const models = [{ providerID: "a", modelID: "m1" }, { providerID: "ollama", modelID: "q7b", kind: "local" }];
+    const storage = memStorage();
+    const { ctx, hooks, switches } = makeCtx(storage, { mode: "manual", models });
+    await setup(ctx as unknown);
+    const event = retryEvent("s1", "a", "m1", { message: "rate limited", status: 429 }) as unknown as {
+      decision: unknown;
+    };
+    await (hooks.get("retry") as (e: never) => Promise<void>)(event as never);
+    expect(event.decision).toEqual({ retry: false });
+    expect(switches).toEqual([]);
+    const last = String(storage.mem.get("failover:last:s1"));
+    expect(last).toContain("all remotes exhausted");
+    expect(last).toContain("/failover-use ollama/q7b");
+  });
+
+  it("(7c) switchModel-missing host degrades to suggest-only (no throw)", async () => {
+    const models = [{ providerID: "a", modelID: "m1" }, { providerID: "ollama", modelID: "q7b", kind: "local" }];
+    const storage = memStorage();
+    const { ctx, hooks } = makeCtx(storage, { mode: "auto", models });
+    delete (ctx.session as Record<string, unknown>)["switchModel"];
+    await setup(ctx as unknown);
+    const event = retryEvent("s1", "a", "m1", { message: "rate limited", status: 429 }) as unknown as {
+      decision: unknown;
+    };
+    await (hooks.get("retry") as (e: never) => Promise<void>)(event as never);
+    expect(event.decision).toEqual({ retry: false });
+    const last = String(storage.mem.get("failover:last:s1"));
+    expect(last).toContain("/failover-use ollama/q7b");
+  });
 });
 
 describe("shell: offline return", () => {

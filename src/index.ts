@@ -113,10 +113,20 @@ function parseModelRef(text: string): { providerID: string; modelID: string } | 
 // model list when the host exposes one. Never throws.
 async function resolveCandidates(ctx: Ctx, allowPaid: string[]): Promise<Candidate[]> {
   const out = new Map<string, Candidate>();
-  const push = (providerID: string, modelID: string, kind: unknown) => {
+  const push = (providerID: string, modelID: string, kind: unknown, raw?: Record<string, unknown>) => {
     const id = fullId(providerID, modelID);
     if (!out.has(id)) {
-      out.set(id, { id, providerID, modelID, kind: classifyKind(providerID, id, modelID, kind, allowPaid) });
+      const candidate: Candidate = {
+        id,
+        providerID,
+        modelID,
+        kind: classifyKind(providerID, id, modelID, kind, allowPaid),
+      };
+      // Carry capability caps through so shouldReturnFromOffline can tell a
+      // weak remote (tools:false / small context) from a strictly-better one.
+      if (typeof raw?.["tools"] === "boolean") candidate.tools = raw["tools"];
+      if (typeof raw?.["context"] === "number") candidate.context = raw["context"];
+      out.set(id, candidate);
     }
   };
 
@@ -129,7 +139,7 @@ async function resolveCandidates(ctx: Ctx, allowPaid: string[]): Promise<Candida
         const providerID = rec["providerID"];
         const modelID = rec["modelID"];
         if (typeof providerID !== "string" || typeof modelID !== "string") continue;
-        push(providerID, modelID, rec["kind"]);
+        push(providerID, modelID, rec["kind"], rec);
       }
     }
     const localModel = ctx.options?.["localModel"];
@@ -157,7 +167,7 @@ async function resolveCandidates(ctx: Ctx, allowPaid: string[]): Promise<Candida
         // Live model infos use `id` for the model id (Model.Ref shape).
         const modelID = rec["id"] ?? rec["modelID"];
         if (typeof providerID !== "string" || typeof modelID !== "string") continue;
-        push(providerID, modelID, rec["kind"] ?? (providerID === "ollama" ? "local" : undefined));
+        push(providerID, modelID, rec["kind"] ?? (providerID === "ollama" ? "local" : undefined), rec);
       }
     }
   } catch {

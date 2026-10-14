@@ -53,11 +53,31 @@ function configCandidates() {
   ];
 }
 
+async function probeOpencode() {
+  const direct = await runCapture("opencode", ["--version"], 8000);
+  if (direct.ok && direct.out) return direct;
+  if (platform() === "win32") {
+    // npm-style shims: a bare `opencode` may resolve to opencode.ps1, which
+    // is NOT in PATHEXT, so direct spawn fails with ENOENT even though
+    // shells resolve it. Try the .cmd sibling first (cheap, directly
+    // spawnable), then PowerShell (resolves .ps1 on PATH).
+    const viaCmd = await runCapture("opencode.cmd", ["--version"], 8000);
+    if (viaCmd.ok && viaCmd.out) return viaCmd;
+    const viaPs = await runCapture(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", "opencode --version"],
+      15000,
+    );
+    if (viaPs.ok && viaPs.out) return viaPs;
+  }
+  return direct;
+}
+
 async function main() {
   const lines = [];
   lines.push(`[failover-check] platform: ${platform()} ${release()}, node: ${process.version}`);
 
-  const opencode = await runCapture("opencode", ["--version"], 8000);
+  const opencode = await probeOpencode();
   lines.push(
     opencode.ok && opencode.out
       ? `[failover-check] opencode version: ${opencode.out.split("\n")[0]}`

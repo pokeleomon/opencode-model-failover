@@ -175,7 +175,9 @@ describe("shell: commands", () => {
       "failover-auto",
       "failover-manual",
       "failover-recheck",
+      "failover-setup",
       "failover-status",
+      "failover-update",
       "failover-use",
     ]);
     const use = commands.find((c) => c.name === "failover-use")!;
@@ -204,5 +206,22 @@ describe("shell: commands", () => {
     expect(auto).toContain("/failover-manual");
     expect(manual).toContain("manual");
     expect(manual).toContain("/failover-auto");
+  });
+
+  it("(6) /failover-setup + /failover-update registered; setup announces host + auto/manual steps", async () => {
+    const storage = memStorage();
+    const { ctx, commands } = makeCtx(storage, { models: BASE_MODELS });
+    await setup(ctx as unknown);
+    const names = commands.map((c) => c.name);
+    expect(names).toContain("failover-setup");
+    expect(names).toContain("failover-update");
+    const setupCmd = commands.find((c) => c.name === "failover-setup")!;
+    await setupCmd.execute({ sessionID: "s1", prompt: { text: "/failover-setup" } } as never);
+    const last = String(storage.mem.get("failover:last:s1"));
+    expect(last).toContain("Ollama");
+    expect(last).toContain("automatic");
+    const updateCmd = commands.find((c) => c.name === "failover-update")!;
+    await updateCmd.execute({ sessionID: "s1", prompt: { text: "/failover-update" } } as never);
+    expect(String(storage.mem.get("failover:last:s1"))).toContain("update");
   });
 });

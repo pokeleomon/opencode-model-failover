@@ -7,6 +7,7 @@ import {
   type Candidate,
 } from "./failover.js";
 import { getMode, setMode, type FailoverMode } from "./mode.js";
+import { buildSetupGuide, buildUpdateReport, diagnoseHost } from "./setup.js";
 
 // Storage keys (all under ctx.storage):
 //   failover:mode                 "auto" | "manual" (see mode.ts)
@@ -612,6 +613,44 @@ async function registerCommands(ctx: Ctx): Promise<void> {
         execute: async (input) => {
           const result = await maybeReturnFromOffline(ctx, input.sessionID, `recheck:${input.sessionID}:${Date.now()}`);
           await recordAnnouncement(ctx, input.sessionID, result.text);
+        },
+      });
+      editor.add({
+        name: "failover-setup",
+        description: "Guided setup: Ollama binary, local model pull, provider wiring, keys (auto vs manual per component)",
+        execute: async (input) => {
+          // Stateless and re-runnable: every component offers automatic /
+          // manual / skip. The merged config text is previewed, never
+          // written, here (the caller handles backup + diff preview).
+          const rawText = commandText(input).toLowerCase();
+          const preference = rawText.includes("manual") ? "manual" : rawText.includes("auto") ? "auto" : "ask";
+          try {
+            const diag = await diagnoseHost();
+            await recordAnnouncement(ctx, input.sessionID, buildSetupGuide(diag, { preference }));
+          } catch {
+            await recordAnnouncement(
+              ctx,
+              input.sessionID,
+              "[model-failover] setup: host diagnosis failed; preflight with `node scripts/check.mjs`, then say /failover-setup again (all steps skippable).",
+            );
+          }
+        },
+      });
+      editor.add({
+        name: "failover-update",
+        description: "Re-check all four setup components (binary, models, providers, keys) and guide updates",
+        execute: async (input) => {
+          // Re-runnable report; nothing is applied without confirmation.
+          try {
+            const diag = await diagnoseHost();
+            await recordAnnouncement(ctx, input.sessionID, buildUpdateReport(diag));
+          } catch {
+            await recordAnnouncement(
+              ctx,
+              input.sessionID,
+              "[model-failover] update: host diagnosis failed; re-run `node scripts/check.mjs` and /failover-status manually.",
+            );
+          }
         },
       });
     });

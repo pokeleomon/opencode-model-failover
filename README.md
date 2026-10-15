@@ -20,6 +20,12 @@ Plugin add:
 opencode plugin add opencode-model-failover
 ```
 
+From GitHub:
+
+```sh
+opencode plugin add github.com/pokeleomon/automatic-agent-switcher
+```
+
 Local path — add to the `plugins` list in your OpenCode config:
 
 ```jsonc

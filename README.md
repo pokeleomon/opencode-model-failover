@@ -66,3 +66,12 @@ Paid models stay excluded until you say `opt in <provider>/<model>`. Secrets use
 Targets OpenCode V2 plugin APIs with feature detection: on hosts without the retry hook or `switchModel` (e.g. OpenCode 1.19.0) the plugin degrades to manual-suggest-only — `/failover-status`, `/failover-use` guidance, and `/failover-recheck` still work; automatic switching does not.
 
 Limitation: the prompt hook carries no current-model field, so auto-return cannot see a manual `/model` switch made outside the plugin and may switch back once per scope — `/failover-use` pins the session and is never overridden.
+
+## Troubleshooting
+
+**Updated the plugin but behavior didn't change?** OpenCode caches git
+plugins under `~/.cache/opencode/npm/git-opencode-model-failover-*/` and
+1.19.0 has no plugin-update command, so a restart alone can reuse the old
+clone. Fully quit OpenCode (TUI closed, no `opencode.exe` left running),
+delete the `git-opencode-model-failover-*` cache directories, reopen, and
+re-run your command.

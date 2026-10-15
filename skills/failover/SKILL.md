@@ -30,7 +30,7 @@ Say "switch to manual switching" → `/failover-manual`. Say "go automatic" → 
 
 ## Announce rule (load-bearing)
 
-The retry hook cannot inject chat text. On your next turn, read storage key `failover:last:<sessionID>` and surface it: old → new model, reason, mode, plus the flip hint (`/failover-manual` in auto mode, `/failover-auto` in manual mode). If the key is absent, nothing switched — say so. Never invent a switch the key does not record.
+Every switch or suggestion is delivered to the session AND persisted to storage key `failover:last:<sessionID>` (durable record). If the user saw nothing (older host without session delivery), read the key on your next turn and surface it: old → new model, reason, mode, plus the flip hint (`/failover-manual` in auto mode, `/failover-auto` in manual mode). If the key is absent, nothing switched — say so. Never invent a switch the key does not record.
 
 ## Setup: auto vs manual per component
 

@@ -1,4 +1,7 @@
 import { Plugin } from "@opencode/plugin";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   cooldownMsFor,
   isLimitError,
@@ -52,6 +55,17 @@ type Ctx = {
   };
   command?: {
     transform?: (cb: (editor: { add: (def: CommandDef) => void }) => void) => Promise<unknown>;
+  };
+  skill?: {
+    transform?: (
+      cb: (editor: {
+        list: () => readonly { id: string }[];
+        get: (id: string) => { id: string } | undefined;
+        add: (skill: { id: string; name: string; description?: string; path: string; content: string }) => void;
+        update: (id: string, update: (skill: { content: string; path: string }) => void) => void;
+        remove: (id: string) => void;
+      }) => void,
+    ) => Promise<unknown>;
   };
   model?: {
     list?: (input?: unknown) => Promise<unknown> | unknown;
@@ -318,7 +332,7 @@ async function handleRetry(ctx: Ctx, event: RetryEvent): Promise<void> {
     // the user stays in control. Already-on-local needs no suggestion.
     if (mode !== "auto" || !canSwitch) {
       if (local && local.id === currentId) {
-        await recordAnnouncement(
+        await deliverToSession(
           ctx,
           event.sessionID,
           buildAnnouncement({
@@ -332,7 +346,7 @@ async function handleRetry(ctx: Ctx, event: RetryEvent): Promise<void> {
         );
         return;
       }
-      await recordAnnouncement(
+      await deliverToSession(
         ctx,
         event.sessionID,
         buildAnnouncement({
@@ -359,7 +373,7 @@ async function handleRetry(ctx: Ctx, event: RetryEvent): Promise<void> {
         // Switching failed; the announcement below still tells the truth.
       }
     }
-    await recordAnnouncement(
+    await deliverToSession(
       ctx,
       event.sessionID,
       buildAnnouncement({
@@ -383,7 +397,7 @@ async function handleRetry(ctx: Ctx, event: RetryEvent): Promise<void> {
     hops = 0;
   }
   if (hops >= MAX_HOPS) {
-    await recordAnnouncement(
+    await deliverToSession(
       ctx,
       event.sessionID,
       buildAnnouncement({
@@ -397,7 +411,7 @@ async function handleRetry(ctx: Ctx, event: RetryEvent): Promise<void> {
   }
 
   if (mode === "manual" || !canSwitch) {
-    await recordAnnouncement(
+    await deliverToSession(
       ctx,
       event.sessionID,
       buildAnnouncement({
@@ -425,13 +439,13 @@ async function handleRetry(ctx: Ctx, event: RetryEvent): Promise<void> {
     } catch {
       // Tracking write is best-effort.
     }
-    await recordAnnouncement(
+    await deliverToSession(
       ctx,
       event.sessionID,
       buildAnnouncement({ oldModel: currentId, newModel: next.id, reason, mode }),
     );
   } catch {
-    await recordAnnouncement(
+    await deliverToSession(
       ctx,
       event.sessionID,
       buildAnnouncement({
@@ -546,6 +560,71 @@ async function maybeReturnFromOffline(
 
 function commandText(input: { sessionID: string; prompt: { text?: unknown } }): string {
   return typeof input.prompt?.text === "string" ? input.prompt.text : "";
+}
+
+// Locate the bundled skill doc at runtime. The package may be executed
+// from src/ directly or from a build/dist layout, so probe candidates and
+// take the first readable SKILL.md. Absence degrades silently: commands
+// still work, the agent just won't auto-discover the guide.
+function findSkillFile(): { path: string; content: string } | undefined {
+  const candidates: string[] = [];
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    candidates.push(
+      resolve(here, "../skills/failover/SKILL.md"),
+      resolve(here, "../../skills/failover/SKILL.md"),
+    );
+  } catch {
+    // import.meta unavailable in this loader; fall through to cwd probes.
+  }
+  try {
+    candidates.push(resolve(process.cwd(), "skills/failover/SKILL.md"));
+  } catch {
+    // No process cwd available.
+  }
+  for (const p of candidates) {
+    try {
+      if (!existsSync(p)) continue;
+      const content = readFileSync(p, "utf8");
+      if (content.includes("model-failover")) return { path: p, content };
+    } catch {
+      // Unreadable candidate; try the next.
+    }
+  }
+  return undefined;
+}
+
+async function registerSkills(ctx: Ctx): Promise<void> {
+  const transform = ctx.skill?.transform;
+  if (typeof transform !== "function") return;
+  const found = findSkillFile();
+  if (!found) return;
+  const skill = {
+    id: "model-failover",
+    name: "Model failover",
+    description:
+      "Use when OpenCode hits model usage or rate limits, needs an Ollama offline fallback, or needs failover setup and auto/manual toggle.",
+    path: found.path,
+    content: found.content,
+  };
+  try {
+    await transform((editor) => {
+      try {
+        if (editor.get("model-failover")) {
+          editor.update("model-failover", (s) => {
+            s.content = skill.content;
+            s.path = skill.path;
+          });
+          return;
+        }
+      } catch {
+        // Fall through to add.
+      }
+      editor.add(skill);
+    });
+  } catch {
+    // Skill registration failing must not break the plugin on old hosts.
+  }
 }
 
 async function registerCommands(ctx: Ctx): Promise<void> {
@@ -727,6 +806,7 @@ const plugin = Plugin.define({
     }
 
     await registerCommands(ctx);
+    await registerSkills(ctx);
 
     // Feature-detect the retry path. If the hook or switchModel is missing
     // (e.g. OpenCode 1.19.0), degrade to manual-suggest-only via commands.
@@ -757,7 +837,7 @@ const plugin = Plugin.define({
             }
             const result = await maybeReturnFromOffline(ctx, prompt.sessionID, scope);
             if (result.switched) {
-              await recordAnnouncement(ctx, prompt.sessionID, result.text);
+              await deliverToSession(ctx, prompt.sessionID, result.text);
             }
           })();
         });

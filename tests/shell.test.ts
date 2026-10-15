@@ -27,6 +27,7 @@ function makeCtx(storage: StorageStub, options: Record<string, unknown> = {}) {
   const commands: { name: string; execute: (i: never) => Promise<void> }[] = [];
   const switches: { sessionID: string; model: { providerID: string; id: string } }[] = [];
   const synthetics: { sessionID: string; text: string }[] = [];
+  const skills: { id: string; name: string; description?: string; path: string; content: string }[] = [];
   const ctx = {
     options,
     storage,
@@ -48,8 +49,28 @@ function makeCtx(storage: StorageStub, options: Record<string, unknown> = {}) {
         return { dispose: async () => {} };
       },
     },
+    skill: {
+      transform: async (
+        cb: (e: {
+          list: () => never[];
+          get: (id: string) => undefined;
+          add: (d: never) => void;
+          update: (id: string, u: (s: never) => void) => void;
+          remove: (id: string) => void;
+        }) => void,
+      ) => {
+        cb({
+          list: () => [],
+          get: () => undefined,
+          add: (d: never) => skills.push(d as never),
+          update: () => {},
+          remove: () => {},
+        });
+        return { dispose: async () => {} };
+      },
+    },
   };
-  return { ctx, hooks, commands, switches, synthetics };
+  return { ctx, hooks, commands, switches, synthetics, skills };
 }
 
 async function setup(ctx: unknown): Promise<void> {
@@ -303,5 +324,58 @@ describe("shell: command delivery", () => {
     await status.execute({ sessionID: "s1", prompt: { text: "/failover-status" } } as never);
     expect(synthetics).toEqual([]);
     expect(String(storage.mem.get("failover:last:s1"))).toContain("mode:");
+  });
+});
+
+describe("shell: hook delivery + skill registration", () => {
+  it("(9a) auto retry switch is session-visible (hook path, not storage-only)", async () => {
+    const storage = memStorage();
+    const { ctx, hooks, synthetics } = makeCtx(storage, { mode: "auto", models: BASE_MODELS });
+    await setup(ctx as unknown);
+    const event = retryEvent("s1", "a", "m1", { message: "rate limited", status: 429 });
+    await (hooks.get("retry") as (e: never) => Promise<void>)(event as never);
+    // REGRESSION: hook announcements were storage-only, so mid-session
+    // auto-switches happened with no visible message.
+    expect(synthetics.length).toBe(1);
+    expect(synthetics[0].sessionID).toBe("s1");
+    expect(synthetics[0].text).toContain("b/m2");
+  });
+
+  it("(9b) manual retry suggestion is session-visible", async () => {
+    const storage = memStorage();
+    const { ctx, hooks, synthetics } = makeCtx(storage, { mode: "manual", models: BASE_MODELS });
+    await setup(ctx as unknown);
+    const event = retryEvent("s1", "a", "m1", { message: "quota exceeded", status: 400 });
+    await (hooks.get("retry") as (e: never) => Promise<void>)(event as never);
+    expect(synthetics.length).toBe(1);
+    expect(synthetics[0].text).toContain("/failover-use b/m2");
+  });
+
+  it("(9c) prompt-hook auto-return delivers only when switched (no per-prompt spam)", async () => {
+    const models = [
+      { providerID: "a", modelID: "weak", kind: "free", tools: false, context: 8000 },
+      { providerID: "ollama", modelID: "q7b", kind: "local", tools: true, context: 32768 },
+    ];
+    const storage = memStorage({ "failover:current:s1": "ollama/q7b" });
+    const { ctx, hooks, synthetics } = makeCtx(storage, { mode: "auto", models });
+    await setup(ctx as unknown);
+    await (hooks.get("prompt") as (e: never) => Promise<void>)(
+      { sessionID: "s1", messageID: "m-1", prompt: { text: "hi" } } as never,
+    );
+    expect(synthetics).toEqual([]);
+  });
+
+  it("(9d) skill model-failover is registered with content; missing skill API does not throw", async () => {
+    const storage = memStorage();
+    const { ctx, skills } = makeCtx(storage, { models: BASE_MODELS });
+    await setup(ctx as unknown);
+    const reg = skills.find((s) => s.id === "model-failover");
+    expect(reg).toBeDefined();
+    expect(reg!.content).toContain("/failover-status");
+    expect(reg!.content).toContain("switch to manual switching");
+
+    const bare = makeCtx(memStorage(), { models: BASE_MODELS });
+    delete (bare.ctx as Record<string, unknown>)["skill"];
+    await expect(setup(bare.ctx as unknown)).resolves.toBeUndefined();
   });
 });

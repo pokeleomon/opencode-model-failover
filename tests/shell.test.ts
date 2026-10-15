@@ -26,6 +26,7 @@ function makeCtx(storage: StorageStub, options: Record<string, unknown> = {}) {
   const hooks = new Map<string, (e: never) => unknown>();
   const commands: { name: string; execute: (i: never) => Promise<void> }[] = [];
   const switches: { sessionID: string; model: { providerID: string; id: string } }[] = [];
+  const synthetics: { sessionID: string; text: string }[] = [];
   const ctx = {
     options,
     storage,
@@ -37,6 +38,9 @@ function makeCtx(storage: StorageStub, options: Record<string, unknown> = {}) {
       switchModel: async (input: { sessionID: string; model: { providerID: string; id: string } }) => {
         switches.push(input);
       },
+      synthetic: async (input: { sessionID: string; text: string }) => {
+        synthetics.push(input);
+      },
     },
     command: {
       transform: async (cb: (e: { add: (d: never) => void }) => void) => {
@@ -45,7 +49,7 @@ function makeCtx(storage: StorageStub, options: Record<string, unknown> = {}) {
       },
     },
   };
-  return { ctx, hooks, commands, switches };
+  return { ctx, hooks, commands, switches, synthetics };
 }
 
 async function setup(ctx: unknown): Promise<void> {
@@ -270,5 +274,34 @@ describe("shell: commands", () => {
     const updateCmd = commands.find((c) => c.name === "failover-update")!;
     await updateCmd.execute({ sessionID: "s1", prompt: { text: "/failover-update" } } as never);
     expect(String(storage.mem.get("failover:last:s1"))).toContain("update");
+  });
+});
+
+describe("shell: command delivery", () => {
+  it("(8a) /failover-status emits a session-visible message AND persists storage", async () => {
+    const storage = memStorage();
+    const { ctx, commands, synthetics } = makeCtx(storage, { models: BASE_MODELS });
+    await setup(ctx as unknown);
+    const status = commands.find((c) => c.name === "failover-status")!;
+    await status.execute({ sessionID: "s1", prompt: { text: "/failover-status" } } as never);
+    // REGRESSION (flashed box then gone): execute() returned void after a
+    // storage-only write, so the host rendered nothing. The command must
+    // attempt session delivery.
+    expect(synthetics.length).toBe(1);
+    expect(synthetics[0].sessionID).toBe("s1");
+    expect(synthetics[0].text).toContain("mode:");
+    // Storage record is still kept (skill bridge + /failover-status `last`).
+    expect(String(storage.mem.get("failover:last:s1"))).toContain("mode:");
+  });
+
+  it("(8b) host without session.synthetic degrades to storage-only (no throw)", async () => {
+    const storage = memStorage();
+    const { ctx, commands, synthetics } = makeCtx(storage, { models: BASE_MODELS });
+    delete (ctx.session as Record<string, unknown>)["synthetic"];
+    await setup(ctx as unknown);
+    const status = commands.find((c) => c.name === "failover-status")!;
+    await status.execute({ sessionID: "s1", prompt: { text: "/failover-status" } } as never);
+    expect(synthetics).toEqual([]);
+    expect(String(storage.mem.get("failover:last:s1"))).toContain("mode:");
   });
 });

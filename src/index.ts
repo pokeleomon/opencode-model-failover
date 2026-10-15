@@ -48,6 +48,7 @@ type Ctx = {
       sessionID: string;
       model: { providerID: string; id: string };
     }) => Promise<unknown>;
+    synthetic?: (input: { sessionID: string; text: string }) => Promise<unknown>;
   };
   command?: {
     transform?: (cb: (editor: { add: (def: CommandDef) => void }) => void) => Promise<unknown>;
@@ -249,6 +250,24 @@ async function recordAnnouncement(ctx: Ctx, sessionID: string, text: string): Pr
     await ctx.storage?.set((LAST_PREFIX + sessionID) as string, text as never);
   } catch {
     // Announcement persistence is best-effort.
+  }
+}
+
+// Command responses must be VISIBLE in the session, not just persisted:
+// command execute() returns void, so a storage-only write renders nothing
+// (the "flashed box then gone" symptom). Session delivery first
+// (synthetic message: no agent turn, no model spend), storage always as
+// the record the skill and /failover-status read back. Hook paths keep
+// using recordAnnouncement directly: hooks must not inject session
+// messages outside a user-invoked command.
+async function deliverToSession(ctx: Ctx, sessionID: string, text: string): Promise<void> {
+  await recordAnnouncement(ctx, sessionID, text);
+  const synthetic = ctx.session?.synthetic;
+  if (typeof synthetic !== "function") return;
+  try {
+    await synthetic.call(ctx.session, { sessionID, text });
+  } catch {
+    // Hosts without (working) synthetic keep the storage-only record.
   }
 }
 
@@ -540,7 +559,7 @@ async function registerCommands(ctx: Ctx): Promise<void> {
         description: "Switch model failover to automatic mode",
         execute: async (input) => {
           await setMode(storage, "auto");
-          await recordAnnouncement(
+          await deliverToSession(
             ctx,
             input.sessionID,
             "[model-failover:auto] Automatic switching enabled. Limits will trigger a switch with an announcement.",
@@ -552,7 +571,7 @@ async function registerCommands(ctx: Ctx): Promise<void> {
         description: "Switch model failover to manual-suggest mode",
         execute: async (input) => {
           await setMode(storage, "manual");
-          await recordAnnouncement(
+          await deliverToSession(
             ctx,
             input.sessionID,
             "[model-failover:manual] Manual mode enabled. Limits will suggest candidates instead of switching.",
@@ -571,7 +590,7 @@ async function registerCommands(ctx: Ctx): Promise<void> {
             `exhausted (${exhausted.size}): ${[...exhausted.keys()].join(", ") || "none"}`,
             `last: ${typeof last === "string" ? last : "none"}`,
           ];
-          await recordAnnouncement(ctx, input.sessionID, lines.join("\n"));
+          await deliverToSession(ctx, input.sessionID, lines.join("\n"));
         },
       });
       editor.add({
@@ -580,7 +599,7 @@ async function registerCommands(ctx: Ctx): Promise<void> {
         execute: async (input) => {
           const ref = parseModelRef(commandText(input));
           if (!ref) {
-            await recordAnnouncement(
+            await deliverToSession(
               ctx,
               input.sessionID,
               "Usage: /failover-use <provider/model>. This pins the session and disables auto-return until re-enabled.",
@@ -595,7 +614,7 @@ async function registerCommands(ctx: Ctx): Promise<void> {
               ? undefined
               : candidates.find((c) => c.modelID === ref.modelID));
           if (!target) {
-            await recordAnnouncement(
+            await deliverToSession(
               ctx,
               input.sessionID,
               `Unknown model "${commandText(input).trim()}". Known: ${candidates.map((c) => c.id).join(", ") || "none configured"}.`,
@@ -603,7 +622,7 @@ async function registerCommands(ctx: Ctx): Promise<void> {
             return;
           }
           if (typeof ctx.session?.switchModel !== "function") {
-            await recordAnnouncement(
+            await deliverToSession(
               ctx,
               input.sessionID,
               `Host cannot switch models; to use ${target.id}, switch manually in your client.`,
@@ -622,7 +641,7 @@ async function registerCommands(ctx: Ctx): Promise<void> {
               // Tracking writes are best-effort.
             }
             const mode = await getMode(storage, {}).catch(() => "auto" as FailoverMode);
-            await recordAnnouncement(
+            await deliverToSession(
               ctx,
               input.sessionID,
               buildAnnouncement({
@@ -633,7 +652,7 @@ async function registerCommands(ctx: Ctx): Promise<void> {
               }),
             );
           } catch {
-            await recordAnnouncement(
+            await deliverToSession(
               ctx,
               input.sessionID,
               `Switch to ${target.id} failed; staying on the current model.`,
@@ -646,7 +665,7 @@ async function registerCommands(ctx: Ctx): Promise<void> {
         description: "Re-evaluate recovered remotes and return from offline if one is strictly better",
         execute: async (input) => {
           const result = await maybeReturnFromOffline(ctx, input.sessionID, `recheck:${input.sessionID}:${Date.now()}`);
-          await recordAnnouncement(ctx, input.sessionID, result.text);
+          await deliverToSession(ctx, input.sessionID, result.text);
         },
       });
       editor.add({
@@ -660,9 +679,9 @@ async function registerCommands(ctx: Ctx): Promise<void> {
           const preference = rawText.includes("manual") ? "manual" : rawText.includes("auto") ? "auto" : "ask";
           try {
             const diag = await diagnoseHost();
-            await recordAnnouncement(ctx, input.sessionID, buildSetupGuide(diag, { preference }));
+            await deliverToSession(ctx, input.sessionID, buildSetupGuide(diag, { preference }));
           } catch {
-            await recordAnnouncement(
+            await deliverToSession(
               ctx,
               input.sessionID,
               "[model-failover] setup: host diagnosis failed; preflight with `node scripts/check.mjs`, then say /failover-setup again (all steps skippable).",
@@ -677,9 +696,9 @@ async function registerCommands(ctx: Ctx): Promise<void> {
           // Re-runnable report; nothing is applied without confirmation.
           try {
             const diag = await diagnoseHost();
-            await recordAnnouncement(ctx, input.sessionID, buildUpdateReport(diag));
+            await deliverToSession(ctx, input.sessionID, buildUpdateReport(diag));
           } catch {
-            await recordAnnouncement(
+            await deliverToSession(
               ctx,
               input.sessionID,
               "[model-failover] update: host diagnosis failed; re-run `node scripts/check.mjs` and /failover-status manually.",

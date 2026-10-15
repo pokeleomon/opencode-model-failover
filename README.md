@@ -14,16 +14,20 @@ Automatic model failover for OpenCode: when the current model hits a usage or ra
 
 ## Install
 
-Plugin add:
+Plugin add (npm-published names only):
 
 ```sh
 opencode plugin add opencode-model-failover
 ```
 
-From GitHub:
+From GitHub — add to the `plugins` list in your OpenCode config
+(`~/.config/opencode/opencode.json`), mirroring the working
+`name@git+https` form. `opencode plugin add` rejects non-npm names:
 
-```sh
-opencode plugin add github.com/pokeleomon/automatic-agent-switcher
+```jsonc
+{
+  "plugins": ["automatic-agent-switcher@git+https://github.com/pokeleomon/automatic-agent-switcher.git"]
+}
 ```
 
 Local path — add to the `plugins` list in your OpenCode config:

@@ -26,7 +26,7 @@ From GitHub — add to the `plugins` list in your OpenCode config
 
 ```jsonc
 {
-  "plugins": ["automatic-agent-switcher@git+https://github.com/pokeleomon/automatic-agent-switcher.git"]
+  "plugins": ["opencode-model-failover@git+https://github.com/pokeleomon/opencode-model-failover.git"]
 }
 ```
 
@@ -38,10 +38,11 @@ Local path — add to the `plugins` list in your OpenCode config:
 }
 ```
 
-Then restart:
+Then restart OpenCode so the plugin loads (launch the TUI, or `opencode serve` for headless):
 
 ```sh
-opencode service restart
+# TUI (server starts automatically), or headless:
+opencode serve
 ```
 
 ## Commands
